@@ -35,6 +35,7 @@ public:
 
 public Q_SLOTS:
     void setTitle(const QString &title);
+    void setDesktopName(const QString &name);
 
 protected:
     void resizeEvent(QResizeEvent *) override;
@@ -53,6 +54,7 @@ private:
     QPushButton *m_quitButton = nullptr;
 
     QString m_title;
+    QString m_desktopName;
 };
 
 #endif

@@ -141,12 +141,14 @@ MainWindow::MainWindow(QWidget *parent)
         QStringLiteral("/VirtualDesktopManager"),
         QStringLiteral("org.kde.KWin.VirtualDesktopManager"),
         QStringLiteral("desktopsChanged"),
-        m_tabBar,
-        SLOT(repaint()));
+        this,
+        SLOT(handleDesktopChanged()));
 
     connect(m_outputOrderWatcher, &OutputOrderWatcher::outputOrderChanged, this, &MainWindow::updateScreenMenu);
 
     applySettings();
+
+    m_titleBar->setDesktopName(m_tabBar->currentDesktopName());
 
     m_sessionStack->addSession();
 
@@ -663,6 +665,7 @@ void MainWindow::handleLastTabClosed()
 void MainWindow::handleDesktopChanged()
 {
     m_tabBar->updateVisibleTabs();
+    m_titleBar->setDesktopName(m_tabBar->currentDesktopName());
 
     int activeSession = m_sessionStack->activeSessionId();
     QString tabDesktop = m_tabBar->tabDesktop(activeSession);

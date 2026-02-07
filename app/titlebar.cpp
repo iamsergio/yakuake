@@ -189,18 +189,30 @@ void TitleBar::setFocusButtonState(bool checked)
 
 QString TitleBar::title() const
 {
-    if (!m_skin->titleBarText().isEmpty() && !m_title.isEmpty())
-        return m_title + QStringLiteral(" - ") + m_skin->titleBarText();
-    else if (!m_skin->titleBarText().isEmpty() && m_title.isEmpty())
-        return m_skin->titleBarText();
-    else
+    QString desktopText = m_desktopName.isEmpty()
+        ? QString()
+        : QStringLiteral("Desktop ") + m_desktopName;
+
+    if (!desktopText.isEmpty() && !m_title.isEmpty())
+        return m_title + QStringLiteral(" - ") + desktopText;
+    else if (!desktopText.isEmpty())
+        return desktopText;
+    else if (!m_title.isEmpty())
         return m_title;
+    else
+        return m_skin->titleBarText();
 }
 
 void TitleBar::setTitle(const QString &title)
 {
     m_title = title;
 
+    repaint();
+}
+
+void TitleBar::setDesktopName(const QString &name)
+{
+    m_desktopName = name;
     repaint();
 }
 
