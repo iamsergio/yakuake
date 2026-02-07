@@ -128,6 +128,22 @@ MainWindow::MainWindow(QWidget *parent)
         connect(KX11Extras::self(), &KX11Extras::workAreaChanged, this, &MainWindow::applyWindowGeometry);
     }
 
+    // Connect to KWin VirtualDesktopManager for desktop changes (works on both X11 and Wayland)
+    QDBusConnection::sessionBus().connect(
+        QStringLiteral("org.kde.KWin"),
+        QStringLiteral("/VirtualDesktopManager"),
+        QStringLiteral("org.kde.KWin.VirtualDesktopManager"),
+        QStringLiteral("currentChanged"),
+        this,
+        SLOT(handleDesktopChanged()));
+    QDBusConnection::sessionBus().connect(
+        QStringLiteral("org.kde.KWin"),
+        QStringLiteral("/VirtualDesktopManager"),
+        QStringLiteral("org.kde.KWin.VirtualDesktopManager"),
+        QStringLiteral("desktopsChanged"),
+        m_tabBar,
+        SLOT(repaint()));
+
     connect(m_outputOrderWatcher, &OutputOrderWatcher::outputOrderChanged, this, &MainWindow::updateScreenMenu);
 
     applySettings();
@@ -642,6 +658,29 @@ void MainWindow::handleLastTabClosed()
 {
     if (isVisible() && !Settings::keepOpenAfterLastSessionCloses())
         toggleWindowState();
+}
+
+void MainWindow::handleDesktopChanged()
+{
+    m_tabBar->updateVisibleTabs();
+
+    int activeSession = m_sessionStack->activeSessionId();
+    QString tabDesktop = m_tabBar->tabDesktop(activeSession);
+    QString currentDesktop = m_tabBar->currentDesktopName();
+
+    if (!tabDesktop.isEmpty() && tabDesktop != currentDesktop) {
+        QString sessionIds = m_sessionStack->sessionIdList();
+        QStringList sessionIdStrings = sessionIds.split(QLatin1Char(','), Qt::SkipEmptyParts);
+
+        for (const QString &idStr : sessionIdStrings) {
+            int sessionId = idStr.toInt();
+            QString assoc = m_tabBar->tabDesktop(sessionId);
+            if (assoc.isEmpty() || assoc == currentDesktop) {
+                m_sessionStack->raiseSession(sessionId);
+                break;
+            }
+        }
+    }
 }
 
 void MainWindow::handleSwitchToAction()

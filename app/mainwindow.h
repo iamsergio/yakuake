@@ -85,6 +85,7 @@ public Q_SLOTS:
     void handleTerminalActivity(Terminal *terminal);
     void handleTerminalSilence(Terminal *terminal);
     void handleLastTabClosed();
+    void handleDesktopChanged();
 
 Q_SIGNALS:
     void windowOpened();

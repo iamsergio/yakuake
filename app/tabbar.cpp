@@ -14,7 +14,10 @@
 
 #include <KActionCollection>
 #include <KLocalizedString>
+#include <KX11Extras>
+#include <KWindowSystem>
 
+#include <QActionGroup>
 #include <QApplication>
 #include <QDBusConnection>
 #include <QFontDatabase>
@@ -26,13 +29,56 @@
 #include <QWhatsThis>
 #include <QWheelEvent>
 
+#include <QDBusArgument>
+#include <QDBusInterface>
+#include <QDBusMessage>
+#include <QDBusMetaType>
+#include <QDBusReply>
+#include <QDBusVariant>
 #include <QDrag>
 #include <QLabel>
 #include <QMimeData>
 
+// D-Bus type for KWin virtual desktop: (uss) = position, id, name
+struct KWinVirtualDesktop {
+    uint position;
+    QString id;
+    QString name;
+};
+
+Q_DECLARE_METATYPE(KWinVirtualDesktop)
+Q_DECLARE_METATYPE(QList<KWinVirtualDesktop>)
+
+QDBusArgument &operator<<(QDBusArgument &arg, const KWinVirtualDesktop &desktop)
+{
+    arg.beginStructure();
+    arg << desktop.position << desktop.id << desktop.name;
+    arg.endStructure();
+    return arg;
+}
+
+const QDBusArgument &operator>>(const QDBusArgument &arg, KWinVirtualDesktop &desktop)
+{
+    arg.beginStructure();
+    arg >> desktop.position >> desktop.id >> desktop.name;
+    arg.endStructure();
+    return arg;
+}
+
+static void registerDBusTypes()
+{
+    static bool registered = false;
+    if (!registered) {
+        qDBusRegisterMetaType<KWinVirtualDesktop>();
+        qDBusRegisterMetaType<QList<KWinVirtualDesktop>>();
+        registered = true;
+    }
+}
+
 TabBar::TabBar(MainWindow *mainWindow)
     : QWidget(mainWindow)
 {
+    registerDBusTypes();
     QDBusConnection::sessionBus().registerObject(QStringLiteral("/yakuake/tabs"), this, QDBusConnection::ExportScriptableSlots);
 
     setWhatsThis(xi18nc("@info:whatsthis",
@@ -58,6 +104,7 @@ TabBar::TabBar(MainWindow *mainWindow)
     m_toggleKeyboardInputMenu = new QMenu(xi18nc("@title:menu", "Disable Keyboard Input"), this);
     m_toggleMonitorActivityMenu = new QMenu(xi18nc("@title:menu", "Monitor for Activity"), this);
     m_toggleMonitorSilenceMenu = new QMenu(xi18nc("@title:menu", "Monitor for Silence"), this);
+    m_desktopAssociationMenu = new QMenu(xi18nc("@title:menu", "Show on Desktop"), this);
 
     m_sessionMenu = new QMenu(this);
     connect(m_sessionMenu, SIGNAL(aboutToShow()), this, SLOT(readySessionMenu()));
@@ -116,6 +163,7 @@ void TabBar::readyTabContextMenu()
         m_tabContextMenu->addMenu(m_toggleKeyboardInputMenu);
         m_tabContextMenu->addMenu(m_toggleMonitorActivityMenu);
         m_tabContextMenu->addMenu(m_toggleMonitorSilenceMenu);
+        m_tabContextMenu->addMenu(m_desktopAssociationMenu);
         m_tabContextMenu->addSeparator();
         m_tabContextMenu->addAction(m_mainWindow->actionCollection()->action(QStringLiteral("move-session-left")));
         m_tabContextMenu->addAction(m_mainWindow->actionCollection()->action(QStringLiteral("move-session-right")));
@@ -307,6 +355,140 @@ void TabBar::updateToggleMonitorSilenceMenu(int sessionId)
     }
 }
 
+void TabBar::updateDesktopAssociationMenu(int sessionId)
+{
+    if (!m_tabs.contains(sessionId))
+        return;
+
+    m_desktopAssociationMenu->clear();
+
+    QString currentAssoc = m_tabDesktopAssociation.value(sessionId, QString());
+
+    // Use action group for radio-button behavior
+    QActionGroup *group = new QActionGroup(m_desktopAssociationMenu);
+    group->setExclusive(true);
+
+    QList<QPair<QString, QString>> desktops = allDesktops();
+    for (const auto &desktop : desktops) {
+        const QString &id = desktop.first;
+        const QString &name = desktop.second;
+        QString displayName = name.isEmpty() ? id : name;
+
+        QAction *action = m_desktopAssociationMenu->addAction(displayName);
+        action->setCheckable(true);
+        action->setChecked(currentAssoc == name);
+        action->setActionGroup(group);
+        connect(action, &QAction::triggered, this, [this, sessionId, name]() {
+            setTabDesktop(sessionId, name);
+        });
+    }
+}
+
+QList<int> TabBar::visibleTabs() const
+{
+    QString currentDesktop = currentDesktopName();
+    QList<int> result;
+    for (int sessionId : m_tabs) {
+        QString assoc = m_tabDesktopAssociation.value(sessionId, QString());
+        if (assoc.isEmpty() || assoc == currentDesktop) {
+            result.append(sessionId);
+        }
+    }
+    return result;
+}
+
+void TabBar::setTabDesktop(int sessionId, const QString &desktopName)
+{
+    if (desktopName.isEmpty()) {
+        m_tabDesktopAssociation.remove(sessionId);
+    } else {
+        m_tabDesktopAssociation[sessionId] = desktopName;
+    }
+    updateVisibleTabs();
+}
+
+QString TabBar::tabDesktop(int sessionId) const
+{
+    return m_tabDesktopAssociation.value(sessionId, QString());
+}
+
+QString TabBar::currentDesktopName() const
+{
+    // Get the current desktop ID
+    QDBusMessage currentMsg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.kde.KWin"),
+        QStringLiteral("/VirtualDesktopManager"),
+        QStringLiteral("org.freedesktop.DBus.Properties"),
+        QStringLiteral("Get"));
+    currentMsg << QStringLiteral("org.kde.KWin.VirtualDesktopManager") << QStringLiteral("current");
+
+    QDBusMessage currentReply = QDBusConnection::sessionBus().call(currentMsg);
+    if (currentReply.type() != QDBusMessage::ReplyMessage || currentReply.arguments().isEmpty()) {
+        return QString();
+    }
+
+    QString currentId = currentReply.arguments().first().value<QDBusVariant>().variant().toString();
+    if (currentId.isEmpty()) {
+        return QString();
+    }
+
+    // Get all desktops - returns a(ssu) = array of (string id, string name, uint position)
+    QDBusMessage desktopsMsg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.kde.KWin"),
+        QStringLiteral("/VirtualDesktopManager"),
+        QStringLiteral("org.freedesktop.DBus.Properties"),
+        QStringLiteral("Get"));
+    desktopsMsg << QStringLiteral("org.kde.KWin.VirtualDesktopManager") << QStringLiteral("desktops");
+
+    QDBusMessage desktopsReply = QDBusConnection::sessionBus().call(desktopsMsg);
+    if (desktopsReply.type() != QDBusMessage::ReplyMessage || desktopsReply.arguments().isEmpty()) {
+        return QString();
+    }
+
+    QVariant variant = desktopsReply.arguments().first().value<QDBusVariant>().variant();
+    QList<KWinVirtualDesktop> desktops = qdbus_cast<QList<KWinVirtualDesktop>>(variant);
+
+    for (const KWinVirtualDesktop &desktop : desktops) {
+        if (desktop.id == currentId) {
+            return desktop.name;
+        }
+    }
+
+    return QString();
+}
+
+QList<QPair<QString, QString>> TabBar::allDesktops() const
+{
+    QList<QPair<QString, QString>> result;
+
+    // Get all desktops - returns a(ssu) = array of (string id, string name, uint position)
+    QDBusMessage msg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.kde.KWin"),
+        QStringLiteral("/VirtualDesktopManager"),
+        QStringLiteral("org.freedesktop.DBus.Properties"),
+        QStringLiteral("Get"));
+    msg << QStringLiteral("org.kde.KWin.VirtualDesktopManager") << QStringLiteral("desktops");
+
+    QDBusMessage reply = QDBusConnection::sessionBus().call(msg);
+    if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty()) {
+        return result;
+    }
+
+    QVariant variant = reply.arguments().first().value<QDBusVariant>().variant();
+    QList<KWinVirtualDesktop> desktops = qdbus_cast<QList<KWinVirtualDesktop>>(variant);
+
+    for (const KWinVirtualDesktop &desktop : desktops) {
+        result.append(qMakePair(desktop.id, desktop.name));
+    }
+
+    return result;
+}
+
+void TabBar::updateVisibleTabs()
+{
+    repaint();
+}
+
 void TabBar::contextMenuActionHovered(QAction *action)
 {
     bool ok = false;
@@ -339,6 +521,7 @@ void TabBar::contextMenuEvent(QContextMenuEvent *event)
         updateToggleKeyboardInputMenu(sessionId);
         updateToggleMonitorActivityMenu(sessionId);
         updateToggleMonitorSilenceMenu(sessionId);
+        updateDesktopAssociationMenu(sessionId);
 
         m_mainWindow->setContextDependentActionsQuiet(true);
 
@@ -393,8 +576,12 @@ void TabBar::paintEvent(QPaintEvent *)
     QRect tabsClipRect(x, y, m_closeTabButton->x() - x, height() - y);
     painter.setClipRect(tabsClipRect);
 
+    QString currentDesktop = currentDesktopName();
     for (int index = 0; index < m_tabs.count(); ++index) {
-        x = drawTab(x, y, index, painter);
+        int sessionId = m_tabs.at(index);
+        QString tabDesktop = m_tabDesktopAssociation.value(sessionId, QString());
+        bool onCurrentDesktop = tabDesktop.isEmpty() || tabDesktop == currentDesktop;
+        x = drawTab(x, y, index, painter, onCurrentDesktop);
         m_tabWidths << x;
     }
 
@@ -430,7 +617,7 @@ void TabBar::paintEvent(QPaintEvent *)
     }
 }
 
-int TabBar::drawTab(int x, int y, int index, QPainter &painter)
+int TabBar::drawTab(int x, int y, int index, QPainter &painter, bool onCurrentDesktop)
 {
     QString title;
     int sessionId;
@@ -441,6 +628,12 @@ int TabBar::drawTab(int x, int y, int index, QPainter &painter)
     sessionId = m_tabs.at(index);
     selected = (sessionId == m_selectedSessionId);
     title = m_tabTitles[sessionId];
+
+    // Apply reduced opacity for tabs not on the current desktop
+    qreal originalOpacity = painter.opacity();
+    if (!onCurrentDesktop) {
+        painter.setOpacity(0.4);
+    }
 
     if (selected) {
         painter.drawPixmap(x, y, m_skin->tabBarSelectedLeftCornerImage());
@@ -505,6 +698,9 @@ int TabBar::drawTab(int x, int y, int index, QPainter &painter)
         painter.drawPixmap(x, m_skin->tabBarPosition().y(), m_skin->tabBarSeparatorImage());
         x += m_skin->tabBarSeparatorImage().width();
     }
+
+    // Restore original opacity
+    painter.setOpacity(originalOpacity);
 
     return x;
 }
@@ -716,6 +912,12 @@ void TabBar::addTab(int sessionId, const QString &title)
     else
         m_tabTitles.insert(sessionId, title);
 
+    // Associate new tab with the current desktop
+    QString desktop = currentDesktopName();
+    if (!desktop.isEmpty()) {
+        m_tabDesktopAssociation[sessionId] = desktop;
+    }
+
     Q_EMIT tabSelected(sessionId);
 }
 
@@ -735,6 +937,7 @@ void TabBar::removeTab(int sessionId)
 
     m_tabs.removeAt(index);
     m_tabTitles.remove(sessionId);
+    m_tabDesktopAssociation.remove(sessionId);
 
     if (m_tabs.isEmpty())
         Q_EMIT lastTabClosed();
@@ -789,6 +992,9 @@ void TabBar::selectTab(int sessionId)
 
 void TabBar::selectNextTab()
 {
+    if (m_tabs.isEmpty())
+        return;
+
     int index = m_tabs.indexOf(m_selectedSessionId);
     int newSelectedSessionId = m_selectedSessionId;
 
@@ -804,6 +1010,9 @@ void TabBar::selectNextTab()
 
 void TabBar::selectPreviousTab()
 {
+    if (m_tabs.isEmpty())
+        return;
+
     int index = m_tabs.indexOf(m_selectedSessionId);
     int newSelectedSessionId = m_selectedSessionId;
 

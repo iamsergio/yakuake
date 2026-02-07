@@ -55,6 +55,13 @@ public Q_SLOTS:
 
     Q_SCRIPTABLE int sessionAtTab(int index);
 
+    void setTabDesktop(int sessionId, const QString &desktopName);
+    QString tabDesktop(int sessionId) const;
+    void updateVisibleTabs();
+
+    QString currentDesktopName() const;
+    QList<QPair<QString, QString>> allDesktops() const;
+
 Q_SIGNALS:
     void newTabRequested();
     void tabSelected(int sessionId);
@@ -103,8 +110,11 @@ private:
     void updateToggleKeyboardInputMenu(int sessionId = -1);
     void updateToggleMonitorSilenceMenu(int sessionId = -1);
     void updateToggleMonitorActivityMenu(int sessionId = -1);
+    void updateDesktopAssociationMenu(int sessionId);
 
-    int drawTab(int x, int y, int index, QPainter &painter);
+    QList<int> visibleTabs() const;
+
+    int drawTab(int x, int y, int index, QPainter &painter, bool onCurrentDesktop = true);
     void moveNewTabButton();
 
     void startDrag(int index);
@@ -122,6 +132,7 @@ private:
     QMenu *m_toggleKeyboardInputMenu = nullptr;
     QMenu *m_toggleMonitorActivityMenu = nullptr;
     QMenu *m_toggleMonitorSilenceMenu = nullptr;
+    QMenu *m_desktopAssociationMenu = nullptr;
     QMenu *m_sessionMenu = nullptr;
 
     QLineEdit *m_lineEdit = nullptr;
@@ -130,6 +141,7 @@ private:
     QList<int> m_tabs;
     QHash<int, QString> m_tabTitles;
     QHash<int, bool> m_tabTitlesSetInteractive;
+    QHash<int, QString> m_tabDesktopAssociation;
     QList<int> m_tabWidths;
 
     int m_selectedSessionId;
