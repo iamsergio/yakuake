@@ -19,6 +19,7 @@
 
 #include <QActionGroup>
 #include <QApplication>
+#include <QColor>
 #include <QDBusConnection>
 #include <QFontDatabase>
 #include <QLineEdit>
@@ -624,16 +625,11 @@ int TabBar::drawTab(int x, int y, int index, QPainter &painter, bool onCurrentDe
     bool selected;
     QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
     int textWidth = 0;
+    int startX = x;
 
     sessionId = m_tabs.at(index);
     selected = (sessionId == m_selectedSessionId);
     title = m_tabTitles[sessionId];
-
-    // Apply reduced opacity for tabs not on the current desktop
-    qreal originalOpacity = painter.opacity();
-    if (!onCurrentDesktop) {
-        painter.setOpacity(0.4);
-    }
 
     if (selected) {
         painter.drawPixmap(x, y, m_skin->tabBarSelectedLeftCornerImage());
@@ -699,8 +695,10 @@ int TabBar::drawTab(int x, int y, int index, QPainter &painter, bool onCurrentDe
         x += m_skin->tabBarSeparatorImage().width();
     }
 
-    // Restore original opacity
-    painter.setOpacity(originalOpacity);
+    // Draw a semi-transparent overlay to lighten tabs not on the current desktop
+    if (!onCurrentDesktop) {
+        painter.fillRect(startX, y, x - startX, height() - y, QColor(255, 255, 255, 160));
+    }
 
     return x;
 }
